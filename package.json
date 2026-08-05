@@ -1,0 +1,38 @@
+{
+  "name": "tg-kb-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.0.0 || >=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node-pg-migrate",
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "mtproto:session": "node scripts/generate-mtproto-session.js",
+    "mtproto:sync": "node scripts/run-mtproto-sync-once.js",
+    "plan:set": "node scripts/set-plan-tier.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "openai": "^4.71.0",
+    "pg": "^8.13.1",
+    "pgvector": "^0.2.0",
+    "pino": "^9.5.0",
+    "telegraf": "^4.16.3",
+    "teleproto": "^1.214.0",
+    "voyageai": "^0.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "input": "^1.0.1",
+    "node-pg-migrate": "^7.9.0",
+    "pino-pretty": "^13.0.0"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.session
+mtproto.session
+npm-debug.log*
+.DS_Store
