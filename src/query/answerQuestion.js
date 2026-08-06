@@ -148,7 +148,11 @@ async function enrichWithMessages(candidates) {
     ...c,
     messages: c.sourceMessageIds.map((id) => {
       const m = byId.get(Number(id));
-      return { authorDisplayName: m?.author_display_name ?? "Unknown", text: m?.text ?? "" };
+      return {
+        authorDisplayName: m?.author_display_name ?? "Unknown",
+        text: m?.text ?? "",
+        sentAt: m?.sent_at,
+      };
     }),
   }));
 }
@@ -191,6 +195,11 @@ function buildMessageLink(telegramChatId, telegramMessageId) {
  * handleQuestion), falling back to sourceMessageIds[0] otherwise (the
  * refused/related path never gets model guidance on this, since the LLM
  * either wasn't consulted or didn't single out a source).
+ *
+ * `messageDate` comes from the cited message's OWN `sent_at`, not the
+ * fragment's `firstMessageAt` — a chunk can span more than one calendar day
+ * (see promptTemplate.js's renderFragment), so whenever the cited message
+ * isn't the fragment's first one, firstMessageAt would show the wrong date.
  */
 async function buildCitations(candidates, lang) {
   if (candidates.length === 0) return [];
@@ -204,7 +213,7 @@ async function buildCitations(candidates, lang) {
     const message = byId.get(Number(targetMessageIds[i]));
     return {
       authorDisplayName: message?.author_display_name ?? unknownAuthor,
-      messageDate: candidate.firstMessageAt,
+      messageDate: message?.sent_at ?? candidate.firstMessageAt,
       telegramMessageId: message?.telegram_message_id,
       textPreview: truncate(message?.text ?? "", PREVIEW_MAX_CHARS),
       link: buildMessageLink(message?.telegram_chat_id, message?.telegram_message_id),

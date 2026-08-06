@@ -89,15 +89,26 @@ function formatFragmentDate(date) {
   return new Date(date).toISOString().slice(0, 10);
 }
 
+// A chunk only ever splits on a >20min gap (chunking.js), with no separate
+// check on calendar day — so a chunk CAN legitimately span midnight (e.g.
+// last message at 23:55, next one at 00:10, still one chunk). The fragment
+// header shows a single date (its first message's), so any later message
+// that actually falls on the next day needs its own date called out
+// per-line — otherwise a relative reference in that later message ("today")
+// silently resolves against the wrong day.
 function renderFragment(chunk, index) {
-  const lines = chunk.messages.map(
-    (m, i) => `(${MESSAGE_LETTERS[i] ?? i}) ${m.authorDisplayName}: ${m.text}`,
-  );
-  return `[Fragment ${index + 1}, ${formatFragmentDate(chunk.firstMessageAt)}]\n${lines.join("\n")}`;
+  const headerDate = formatFragmentDate(chunk.firstMessageAt);
+  const lines = chunk.messages.map((m, i) => {
+    const letter = MESSAGE_LETTERS[i] ?? i;
+    const ownDate = m.sentAt ? formatFragmentDate(m.sentAt) : headerDate;
+    const dateTag = ownDate !== headerDate ? ` [${ownDate}]` : "";
+    return `(${letter})${dateTag} ${m.authorDisplayName}: ${m.text}`;
+  });
+  return `[Fragment ${index + 1}, ${headerDate}]\n${lines.join("\n")}`;
 }
 
 /**
- * @param {Array<{ firstMessageAt: Date, messages: Array<{ authorDisplayName: string, text: string }> }>} contextChunks
+ * @param {Array<{ firstMessageAt: Date, messages: Array<{ authorDisplayName: string, text: string, sentAt: Date }> }>} contextChunks
  *   each chunk's `messages` are its individual source messages, in order —
  *   rendered lettered so the model can cite a specific one (see
  *   SOURCE_MARKER_PREFIX) instead of only the fragment as a whole.
