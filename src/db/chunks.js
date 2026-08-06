@@ -17,3 +17,16 @@ export async function insertChunk(
 export async function deleteAllForChat(chatId, client = pool) {
   await client.query(`DELETE FROM chunks WHERE chat_id = $1`, [chatId]);
 }
+
+/**
+ * Drops specific chunks — used when one of a chunk's source messages was
+ * deleted from Telegram (see query/deletionFilter.js). A chunk merges
+ * several messages into one embedded blob of text, so there's no clean way
+ * to excise just the deleted message's contribution; the whole chunk is
+ * discarded and its surviving messages get re-chunked fresh. Cascades to
+ * the chunk's embedding via embeddings.chunk_id's ON DELETE CASCADE.
+ */
+export async function deleteChunksByIds(chunkIds, client = pool) {
+  if (chunkIds.length === 0) return;
+  await client.query(`DELETE FROM chunks WHERE id = ANY($1::bigint[])`, [chunkIds]);
+}

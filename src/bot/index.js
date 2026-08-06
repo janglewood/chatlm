@@ -2,12 +2,19 @@ import { Telegraf, Markup } from "telegraf";
 import { message } from "telegraf/filters";
 import { env, requireEnv } from "../config/env.js";
 import { logger } from "../logger.js";
-import { handleIncomingMessage, handleBotAddedToChat } from "../ingestion/ingest.js";
+import {
+  handleIncomingMessage,
+  handleBotAddedToChat,
+  handleChatMigrated,
+  resolveChatForQuestion,
+} from "../ingestion/ingest.js";
 import { getChatByTelegramId, getActiveChatsOwnedByUser } from "../db/chats.js";
 import { handleQuestion } from "../query/answerQuestion.js";
 import { formatReply } from "../query/formatReply.js";
 import { RateLimitExceededError } from "../rateLimit/rateLimiter.js";
 import { forgetChat } from "../dataRights/forgetChat.js";
+import { isAddressedToBot } from "../telegram/botMention.js";
+import { detectLanguage, t } from "../query/i18n.js";
 
 requireEnv(["TELEGRAM_BOT_TOKEN"]);
 
@@ -33,19 +40,54 @@ async function isChatAdminOrOwner(ctx, chat) {
 }
 
 async function replyWithAnswer(ctx, { chatId, questionText }) {
+  // Threaded as a reply to the asker's own message: makes the answer
+  // visually attach to their specific question (important once a group has
+  // multiple people asking things close together), and Telegram notifies
+  // the original sender about a reply even if they've muted general group
+  // notifications — which a bare, unthreaded message wouldn't do.
+  //
+  // allow_sending_without_reply matters in practice, not just in theory: the
+  // pipeline can take several seconds, and if the asker deletes their
+  // question before it finishes, Telegram rejects a reply pointing at a
+  // message that no longer exists (400 "message to be replied not found").
+  // Without this flag that happened TWICE in a row live — the real answer
+  // failed to send, and the fallback error message failed the exact same
+  // way, since it reused these same options — and the whole thing silently
+  // vanished into bot.catch() with no feedback at all. This tells Telegram
+  // to fall back to a plain, unthreaded send instead of erroring.
+  const replyOptions = {
+    reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+  };
+  // Same detection the answer pipeline itself uses (i18n.js) — these are
+  // the two replies that can happen WITHOUT ever reaching handleQuestion
+  // (rate-limited, or a hard failure before/during it), so they need their
+  // own language decision instead of inheriting one from an answer object
+  // that doesn't exist yet.
+  const strings = t(detectLanguage(questionText));
+
   try {
-    const answer = await handleQuestion({ chatId, telegramUserId: ctx.from.id, questionText });
-    await ctx.reply(formatReply(answer));
+    // The full pipeline (query expansion, embedding, retrieval, the answer
+    // LLM call) easily takes several seconds now — Telegram's native
+    // "typing..." indicator is the standard way to signal "working on it"
+    // for a chat interface without cluttering the chat with a placeholder
+    // message that then has to be edited or deleted. persistentChatAction
+    // re-sends it for as long as the callback runs; Telegram's own typing
+    // indicator expires after ~5s if not refreshed, hence the 4s interval.
+    await ctx.persistentChatAction(
+      "typing",
+      async () => {
+        const answer = await handleQuestion({ chatId, telegramUserId: ctx.from.id, questionText });
+        await ctx.reply(formatReply(answer), { parse_mode: "HTML", ...replyOptions });
+      },
+      { intervalDuration: 4000 },
+    );
   } catch (err) {
     if (err instanceof RateLimitExceededError) {
-      await ctx.reply(
-        "Вы достигли дневного лимита бесплатных вопросов для этого чата. " +
-          "Обновите тариф для безлимитного доступа.",
-      );
+      await ctx.reply(strings.rateLimited, replyOptions);
       return;
     }
     logger.error({ err }, "Failed to answer question");
-    await ctx.reply("Произошла ошибка при обработке вопроса. Попробуйте позже.");
+    await ctx.reply(strings.genericError, replyOptions);
   }
 }
 
@@ -71,6 +113,25 @@ bot.on("my_chat_member", async (ctx) => {
       ownerTelegramUserId: update.from.id,
     });
   }
+});
+
+// Basic-group-to-supergroup upgrade. Unlike joining/leaving, the bot's own
+// membership doesn't change here, so my_chat_member never fires for it —
+// this is delivered as an ordinary (textless) service message instead, on
+// whichever side of the migration the bot could see. Always calls next():
+// this filter is intentionally broader than message("text") below it, and
+// must fall through for every message that isn't itself a migration event.
+bot.on("message", async (ctx, next) => {
+  const migrateToChatId = ctx.message.migrate_to_chat_id;
+  const migrateFromChatId = ctx.message.migrate_from_chat_id;
+
+  if (migrateToChatId) {
+    await handleChatMigrated({ oldTelegramChatId: ctx.chat.id, newTelegramChatId: migrateToChatId });
+  } else if (migrateFromChatId) {
+    await handleChatMigrated({ oldTelegramChatId: migrateFromChatId, newTelegramChatId: ctx.chat.id });
+  }
+
+  return next();
 });
 
 // `/forget_chat` — delete-on-request (API_CONTRACTS.md §4). Kept even though
@@ -147,7 +208,28 @@ bot.on(message("text"), async (ctx) => {
 
   if (!["group", "supergroup"].includes(ctx.chat.type)) return;
 
-  const { chat } = await handleIncomingMessage({
+  // Defensive: the Bot API doesn't normally deliver a bot its own outgoing
+  // messages, but this is a one-line safety net against ever ingesting one
+  // if that assumption doesn't hold in some mode/edge case.
+  if (ctx.from?.id === ctx.botInfo?.id) return;
+
+  const botUsername = ctx.botInfo?.username;
+
+  // A message that @mentions the bot is a question directed at it, not chat
+  // content — see telegram/botMention.js. Handle it as a question and don't
+  // ingest it: it carries no fact worth indexing, and doing so just adds
+  // noise (e.g. it can resurface as a "related" citation to a later,
+  // similar question).
+  if (isAddressedToBot(ctx.message.text, botUsername)) {
+    const chat = await resolveChatForQuestion({ telegramChatId: ctx.chat.id, chatTitle: ctx.chat.title });
+    const question = ctx.message.text.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
+    if (question) {
+      await replyWithAnswer(ctx, { chatId: chat.id, questionText: question });
+    }
+    return;
+  }
+
+  await handleIncomingMessage({
     telegramChatId: ctx.chat.id,
     chatTitle: ctx.chat.title,
     telegramMessageId: ctx.message.message_id,
@@ -156,14 +238,6 @@ bot.on(message("text"), async (ctx) => {
     text: ctx.message.text,
     sentAt: new Date(ctx.message.date * 1000),
   });
-
-  const botUsername = ctx.botInfo?.username;
-  if (botUsername && ctx.message.text.toLowerCase().includes(`@${botUsername.toLowerCase()}`)) {
-    const question = ctx.message.text.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
-    if (question) {
-      await replyWithAnswer(ctx, { chatId: chat.id, questionText: question });
-    }
-  }
 });
 
 bot.catch((err, ctx) => {
