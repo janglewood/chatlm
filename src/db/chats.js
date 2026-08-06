@@ -56,6 +56,18 @@ export async function updateLastBackfillAt(chatId) {
   await pool.query(`UPDATE chats SET last_backfill_at = now() WHERE id = $1`, [chatId]);
 }
 
+/**
+ * A basic group converting to a supergroup mid-session changes its Telegram
+ * ID entirely — the bot's own membership never changes, so `my_chat_member`
+ * never fires for this. Without repointing the row, the next real message
+ * would arrive addressed to an ID we don't recognize and getOrCreateChat
+ * would spin up a second, empty chat, orphaning everything already indexed.
+ * See ingestion/ingest.js's `handleChatMigrated`.
+ */
+export async function updateTelegramChatId(chatId, newTelegramChatId) {
+  await pool.query(`UPDATE chats SET telegram_chat_id = $2 WHERE id = $1`, [chatId, newTelegramChatId]);
+}
+
 export async function markChatDeleted(chatId, client = pool) {
   await client.query(`UPDATE chats SET deleted_at = now() WHERE id = $1`, [chatId]);
 }

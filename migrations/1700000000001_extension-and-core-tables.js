@@ -32,6 +32,17 @@ export async function up(pgm) {
     CREATE TABLE messages (
       id                      BIGSERIAL PRIMARY KEY,
       chat_id                 BIGINT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      -- The Telegram peer this message actually came from — usually equal to
+      -- the parent chat's current telegram_chat_id, but NOT always: a basic
+      -- group upgraded to a supergroup gets a brand new peer ID, and any
+      -- history from before the upgrade is only fetchable via MTProto under
+      -- the OLD peer ID (Telegram does not renumber old messages into the
+      -- new supergroup's ID space). Storing the message's own origin peer
+      -- here — rather than always trusting the parent chat's current ID —
+      -- is what lets link-building (t.me/c/<peer>/<message>) stay correct
+      -- per-message instead of producing a broken link for pre-upgrade
+      -- history. See mtproto/sync.js's migration-chain backfill.
+      telegram_chat_id        BIGINT NOT NULL,
       telegram_message_id     BIGINT NOT NULL,
       author_telegram_user_id BIGINT,
       author_display_name     TEXT NOT NULL,
@@ -40,7 +51,10 @@ export async function up(pgm) {
       indexed_at              TIMESTAMPTZ,
       deleted_at              TIMESTAMPTZ,
       created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (chat_id, telegram_message_id)
+      -- Scoped by telegram_chat_id, not just chat_id: a message's
+      -- telegram_message_id is only unique within the peer it came from, and
+      -- a chat with pre-upgrade history spans two distinct peers.
+      UNIQUE (chat_id, telegram_chat_id, telegram_message_id)
     );
   `);
 

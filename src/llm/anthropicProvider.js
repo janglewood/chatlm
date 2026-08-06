@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env, requireEnv } from "../config/env.js";
 import {
   SYSTEM_PROMPT,
+  EXPANSION_SYSTEM_PROMPT,
   NO_ANSWER_MARKER,
   NOT_RELATED_MARKER,
   buildUserTurn,
@@ -20,8 +21,6 @@ function getClient() {
   return client;
 }
 
-const NO_INFO_TEXT = "Не нашёл информации по этому вопросу.";
-
 /**
  * LLMProvider implementation for Anthropic Claude, called directly against
  * the Anthropic API (API_CONTRACTS.md §1/§3). Never used for embeddings —
@@ -29,14 +28,17 @@ const NO_INFO_TEXT = "Не нашёл информации по этому во�
  * family routed through OpenRouter instead.
  *
  * @param {{ question: string, contextChunks: Array<{ text: string, firstMessageAt: Date }> }} params
- * @returns {Promise<{ text: string, refused: boolean, offTopic: boolean, tokensUsed: number, sourceIndex: number|null }>}
+ * @returns {Promise<{ text: string, refused: boolean, offTopic: boolean, tokensUsed: number, sourceIndex: number|null, sourceMessageIndex: number|null }>}
+ *   `text` is empty on refusal — the caller (answerQuestion.js) fills in a
+ *   localized refusal message based on the question's language, since this
+ *   provider has no opinion on that.
  */
 export async function generateAnswer({ question, contextChunks }) {
   const response = await getClient().messages.create({
     model: env.LLM_MODEL,
     max_tokens: 1024,
     system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: buildUserTurn(question, contextChunks) }],
+    messages: [{ role: "user", content: buildUserTurn(question, contextChunks, new Date()) }],
   });
 
   const textBlock = response.content.find((block) => block.type === "text");
@@ -44,13 +46,37 @@ export async function generateAnswer({ question, contextChunks }) {
   const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
 
   if (rawText === NOT_RELATED_MARKER) {
-    return { text: NO_INFO_TEXT, refused: true, offTopic: true, tokensUsed, sourceIndex: null };
+    return { text: "", refused: true, offTopic: true, tokensUsed, sourceIndex: null, sourceMessageIndex: null };
   }
 
   if (response.stop_reason === "refusal" || rawText === NO_ANSWER_MARKER || rawText === "") {
-    return { text: NO_INFO_TEXT, refused: true, offTopic: false, tokensUsed, sourceIndex: null };
+    return { text: "", refused: true, offTopic: false, tokensUsed, sourceIndex: null, sourceMessageIndex: null };
   }
 
-  const { text, sourceIndex } = parseAnswer(rawText);
-  return { text, refused: false, offTopic: false, tokensUsed, sourceIndex };
+  const { text, sourceIndex, sourceMessageIndex } = parseAnswer(rawText);
+  return { text, refused: false, offTopic: false, tokensUsed, sourceIndex, sourceMessageIndex };
+}
+
+/**
+ * Rewrites a terse/fragmentary question into a fuller natural-language form
+ * before it's embedded for retrieval — see EXPANSION_SYSTEM_PROMPT for why.
+ * A small, separate call from generateAnswer; failures here should never
+ * block answering, so the caller (answerQuestion.js) falls back to the
+ * original question on error.
+ *
+ * @param {string} question
+ * @returns {Promise<{ text: string, tokensUsed: number }>}
+ */
+export async function expandQuery(question) {
+  const response = await getClient().messages.create({
+    model: env.LLM_MODEL,
+    max_tokens: 60,
+    system: EXPANSION_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: question }],
+  });
+
+  const textBlock = response.content.find((block) => block.type === "text");
+  const text = textBlock?.text?.trim() || question;
+  const tokensUsed = (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0);
+  return { text, tokensUsed };
 }

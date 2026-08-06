@@ -42,7 +42,27 @@ const schema = z
     LLM_MODEL: z.string().min(1).default("claude-opus-4-8"),
 
     // Query pipeline tuning
-    CONFIDENCE_THRESHOLD: floatFromString.default(0.35),
+    // Calibrated against live retrieval scores, not guessed — a real,
+    // correct match came back at 0.28 top-score for a short/casual chat
+    // corpus with Voyage embeddings, well under the previous 0.35 default,
+    // which was gating out genuinely-answerable questions before the LLM
+    // ever saw them. Lowered again after a second live case: the same
+    // correct chunk scored only 0.18 for a terse, keyword-style phrasing of
+    // the same question ("freeze scope info" vs "anything about 'freeze
+    // scope'") — short/fragmentary queries embed measurably weaker than
+    // full questions, a structural property of embedding similarity, not a
+    // bug specific to this corpus. No calibration data yet on how low this
+    // can go before admitting false positives; revisit as more real
+    // questions are logged.
+    CONFIDENCE_THRESHOLD: floatFromString.default(0.18),
+    // Tried lowering this alongside the threshold (200 -> 120) to reduce
+    // topic-dilution in chunks covering several sub-topics in one fast
+    // exchange, but measured it live and it backfired: shrinking a chunk
+    // didn't isolate the target sentence, it just left it diluted by
+    // *different* neighboring content, and shorter chunks scored lower
+    // against Voyage overall — the target dropped from rank #4 to #9,
+    // outside TOP_K entirely. Reverted; CONFIDENCE_THRESHOLD is the lever
+    // that's actually validated by data for this failure mode.
     CHUNK_MAX_TOKENS: intFromString.default(200),
     CHUNK_MAX_GAP_MINUTES: intFromString.default(20),
     FREE_TIER_DAILY_QUESTION_LIMIT: intFromString.default(20),

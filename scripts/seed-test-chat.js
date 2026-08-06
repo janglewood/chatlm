@@ -96,6 +96,7 @@ async function main() {
 
     const inserted = await insertMessage({
       chatId: chat.id,
+      telegramChatId: targetTelegramChatId,
       telegramMessageId: message.id + ID_OFFSET,
       authorTelegramUserId: senderId,
       authorDisplayName: displayName,
