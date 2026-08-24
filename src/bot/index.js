@@ -22,16 +22,24 @@ export const bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
 
 function displayName(from) {
   if (!from) return "Unknown";
-  const name = [from.first_name, from.last_name].filter(Boolean).join(" ").trim();
+  const name = [from.first_name, from.last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   return name || from.username || String(from.id);
 }
 
 async function isChatAdminOrOwner(ctx, chat) {
-  if (chat.owner_telegram_user_id != null && String(chat.owner_telegram_user_id) === String(ctx.from.id)) {
+  if (
+    chat.owner_telegram_user_id != null &&
+    String(chat.owner_telegram_user_id) === String(ctx.from.id)
+  ) {
     return true;
   }
   try {
-    const admins = await ctx.telegram.getChatAdministrators(chat.telegram_chat_id);
+    const admins = await ctx.telegram.getChatAdministrators(
+      chat.telegram_chat_id,
+    );
     return admins.some((admin) => admin.user.id === ctx.from.id);
   } catch (err) {
     logger.warn({ err, chatId: chat.id }, "Could not verify chat admins");
@@ -56,7 +64,10 @@ async function replyWithAnswer(ctx, { chatId, questionText }) {
   // vanished into bot.catch() with no feedback at all. This tells Telegram
   // to fall back to a plain, unthreaded send instead of erroring.
   const replyOptions = {
-    reply_parameters: { message_id: ctx.message.message_id, allow_sending_without_reply: true },
+    reply_parameters: {
+      message_id: ctx.message.message_id,
+      allow_sending_without_reply: true,
+    },
   };
   // Same detection the answer pipeline itself uses (i18n.js) — these are
   // the two replies that can happen WITHOUT ever reaching handleQuestion
@@ -76,8 +87,15 @@ async function replyWithAnswer(ctx, { chatId, questionText }) {
     await ctx.persistentChatAction(
       "typing",
       async () => {
-        const answer = await handleQuestion({ chatId, telegramUserId: ctx.from.id, questionText });
-        await ctx.reply(formatReply(answer), { parse_mode: "HTML", ...replyOptions });
+        const answer = await handleQuestion({
+          chatId,
+          telegramUserId: ctx.from.id,
+          questionText,
+        });
+        await ctx.reply(formatReply(answer), {
+          parse_mode: "HTML",
+          ...replyOptions,
+        });
       },
       { intervalDuration: 4000 },
     );
@@ -104,7 +122,9 @@ bot.command("start", async (ctx) => {
 bot.on("my_chat_member", async (ctx) => {
   const update = ctx.myChatMember;
   const wasOut = ["left", "kicked"].includes(update.old_chat_member.status);
-  const isIn = ["member", "administrator"].includes(update.new_chat_member.status);
+  const isIn = ["member", "administrator"].includes(
+    update.new_chat_member.status,
+  );
 
   if (wasOut && isIn) {
     await handleBotAddedToChat({
@@ -126,9 +146,15 @@ bot.on("message", async (ctx, next) => {
   const migrateFromChatId = ctx.message.migrate_from_chat_id;
 
   if (migrateToChatId) {
-    await handleChatMigrated({ oldTelegramChatId: ctx.chat.id, newTelegramChatId: migrateToChatId });
+    await handleChatMigrated({
+      oldTelegramChatId: ctx.chat.id,
+      newTelegramChatId: migrateToChatId,
+    });
   } else if (migrateFromChatId) {
-    await handleChatMigrated({ oldTelegramChatId: migrateFromChatId, newTelegramChatId: ctx.chat.id });
+    await handleChatMigrated({
+      oldTelegramChatId: migrateFromChatId,
+      newTelegramChatId: ctx.chat.id,
+    });
   }
 
   return next();
@@ -138,14 +164,19 @@ bot.on("message", async (ctx, next) => {
 // the consent flow it originally paired with was cut for MVP.
 bot.command("forget_chat", async (ctx) => {
   if (ctx.chat.type === "private") {
-    await ctx.reply("Эта команда работает в групповом чате, данные которого нужно удалить.");
+    await ctx.reply(
+      "Эта команда работает в групповом чате, данные которого нужно удалить.",
+    );
     return;
   }
 
   await ctx.reply(
     "Вы уверены, что хотите удалить ВСЕ проиндексированные данные этого чата? Это необратимо.",
     Markup.inlineKeyboard([
-      Markup.button.callback("Да, удалить всё", `forget_confirm:${ctx.chat.id}`),
+      Markup.button.callback(
+        "Да, удалить всё",
+        `forget_confirm:${ctx.chat.id}`,
+      ),
       Markup.button.callback("Отмена", "forget_cancel"),
     ]),
   );
@@ -163,14 +194,18 @@ bot.action(/^forget_confirm:(-?\d+)$/, async (ctx) => {
 
   const authorized = await isChatAdminOrOwner(ctx, chat);
   if (!authorized) {
-    await ctx.answerCbQuery("Только администратор чата может это сделать.", { show_alert: true });
+    await ctx.answerCbQuery("Только администратор чата может это сделать.", {
+      show_alert: true,
+    });
     return;
   }
 
   await ctx.answerCbQuery();
   await ctx.editMessageText("Удаляю данные...");
   await forgetChat({ chatId: chat.id, requestedByTelegramUserId: ctx.from.id });
-  await ctx.editMessageText("Все проиндексированные данные этого чата удалены.");
+  await ctx.editMessageText(
+    "Все проиндексированные данные этого чата удалены.",
+  );
 });
 
 bot.action("forget_cancel", async (ctx) => {
@@ -202,7 +237,10 @@ bot.on(message("text"), async (ctx) => {
       return;
     }
 
-    await replyWithAnswer(ctx, { chatId: ownedChats[0].id, questionText: ctx.message.text });
+    await replyWithAnswer(ctx, {
+      chatId: ownedChats[0].id,
+      questionText: ctx.message.text,
+    });
     return;
   }
 
@@ -221,8 +259,13 @@ bot.on(message("text"), async (ctx) => {
   // noise (e.g. it can resurface as a "related" citation to a later,
   // similar question).
   if (isAddressedToBot(ctx.message.text, botUsername)) {
-    const chat = await resolveChatForQuestion({ telegramChatId: ctx.chat.id, chatTitle: ctx.chat.title });
-    const question = ctx.message.text.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
+    const chat = await resolveChatForQuestion({
+      telegramChatId: ctx.chat.id,
+      chatTitle: ctx.chat.title,
+    });
+    const question = ctx.message.text
+      .replace(new RegExp(`@${botUsername}`, "gi"), "")
+      .trim();
     if (question) {
       await replyWithAnswer(ctx, { chatId: chat.id, questionText: question });
     }
@@ -241,7 +284,10 @@ bot.on(message("text"), async (ctx) => {
 });
 
 bot.catch((err, ctx) => {
-  logger.error({ err, updateType: ctx.updateType }, "Unhandled error in bot handler");
+  logger.error(
+    { err, updateType: ctx.updateType },
+    "Unhandled error in bot handler",
+  );
 });
 
 /**
@@ -263,7 +309,16 @@ export async function launchBot() {
     bot
       .launch()
       .then(() => logger.info("Bot stopped"))
-      .catch((err) => logger.error({ err }, "Bot polling crashed"));
+      .catch((err) => {
+        // A dead polling loop (e.g. Telegram 409 Conflict from an overlapping
+        // deploy) must not be swallowed here: the HTTP server and DB pool
+        // stay healthy either way, so a bare log leaves a zombie process that
+        // Railway's healthcheck sees as fine forever while the bot never
+        // receives another update. Exiting lets restartPolicyType:
+        // ON_FAILURE (railway.json) actually recover it.
+        logger.error({ err }, "Bot polling crashed");
+        process.exit(1);
+      });
     logger.info("Bot launched in polling mode");
   } else {
     await bot.telegram.setWebhook(`${env.TELEGRAM_WEBHOOK_URL}${WEBHOOK_PATH}`);
