@@ -78,7 +78,7 @@ export async function handleQuestion({ chatId, telegramUserId, questionText }) {
   // but we still surface loosely-related messages if any clear the much
   // lower RELATED_MESSAGES_MIN_SCORE bar, instead of a bare "not found".
   if (candidates.length === 0 || candidates[0].similarityScore < env.CONFIDENCE_THRESHOLD) {
-    const citations = await buildCitations(filterRelated(candidates), lang);
+    const citations = await buildCitations(filterRelated(candidates), lang, questionText);
     return { text: strings.noInfo, citations, refused: true, lang };
   }
 
@@ -99,7 +99,7 @@ export async function handleQuestion({ chatId, telegramUserId, questionText }) {
     // whatever scored highest by embedding similarity would just be noise.
     const citations = answer.offTopic
       ? []
-      : await buildCitations(filterRelated(candidates), lang);
+      : await buildCitations(filterRelated(candidates), lang, questionText);
     return { text: strings.noInfo, citations, refused: true, lang };
   }
 
@@ -128,7 +128,7 @@ export async function handleQuestion({ chatId, telegramUserId, questionText }) {
 
   const others = filterRelated(candidates.filter((_, i) => i !== primaryIndex));
 
-  const citations = await buildCitations([{ ...primary, citedMessageId }, ...others], lang);
+  const citations = await buildCitations([{ ...primary, citedMessageId }, ...others], lang, questionText);
   return { text: answer.text, citations, refused: false, lang };
 }
 
@@ -188,29 +188,75 @@ function buildMessageLink(telegramChatId, telegramMessageId) {
   return `https://t.me/c/${idStr.slice(4)}/${telegramMessageId}`;
 }
 
+const WORD_MIN_LENGTH = 3;
+
+function extractWords(text) {
+  const matches = (text ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return new Set(matches.filter((w) => w.length >= WORD_MIN_LENGTH));
+}
+
+/**
+ * Which message inside a multi-message chunk a citation should point to,
+ * for candidates the LLM never singled a source out for (the refused/related
+ * path — either the LLM wasn't consulted at all, or it refused and so never
+ * produced a SOURCE line). Picks whichever source message shares the most
+ * words with the question, instead of blindly defaulting to
+ * sourceMessageIds[0] — a chunk's first message can be completely unrelated
+ * to why that chunk actually matched. Verified live: chat_id 1's top match
+ * for "салонный фильтр подходит?" was a chunk whose FIRST message was
+ * "Уровень нормальный был? Не пожалел масла производитель?" (about oil
+ * level) and whose SECOND message was "А салонный фильтр где
+ * располагается?" (the actually-relevant one) — the old code cited the oil
+ * comment, making a genuinely on-topic match look irrelevant to the user.
+ * Falls back to sourceMessageIds[0] when nothing overlaps at all, so a
+ * single-message chunk (the common case) is unaffected.
+ */
+function pickCitedMessageId(sourceMessageIds, messagesById, questionWords) {
+  if (sourceMessageIds.length === 1) return sourceMessageIds[0];
+
+  let bestId = sourceMessageIds[0];
+  let bestScore = -1;
+  for (const id of sourceMessageIds) {
+    const words = extractWords(messagesById.get(Number(id))?.text);
+    let score = 0;
+    for (const w of words) if (questionWords.has(w)) score++;
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
 /**
  * Author, date, short preview, and (when possible) a deep link for each
  * candidate's cited source message — `candidate.citedMessageId` when the
  * model told us which specific message within the fragment it used (see
- * handleQuestion), falling back to sourceMessageIds[0] otherwise (the
- * refused/related path never gets model guidance on this, since the LLM
- * either wasn't consulted or didn't single out a source).
+ * handleQuestion), falling back to a word-overlap heuristic against
+ * `questionText` otherwise (pickCitedMessageId) — the refused/related path
+ * never gets model guidance on this, since the LLM either wasn't consulted
+ * or didn't single out a source.
  *
  * `messageDate` comes from the cited message's OWN `sent_at`, not the
  * fragment's `firstMessageAt` — a chunk can span more than one calendar day
  * (see promptTemplate.js's renderFragment), so whenever the cited message
  * isn't the fragment's first one, firstMessageAt would show the wrong date.
  */
-async function buildCitations(candidates, lang) {
+async function buildCitations(candidates, lang, questionText) {
   if (candidates.length === 0) return [];
 
-  const targetMessageIds = candidates.map((c) => c.citedMessageId ?? c.sourceMessageIds[0]);
-  const messages = await getMessagesByIds(targetMessageIds);
+  // Fetch every candidate's full set of source messages up front (not just
+  // the eventual target), since picking the best one requires comparing all
+  // of them against the question.
+  const allSourceIds = [...new Set(candidates.flatMap((c) => c.sourceMessageIds))];
+  const messages = await getMessagesByIds(allSourceIds);
   const byId = new Map(messages.map((m) => [Number(m.id), m]));
+  const questionWords = extractWords(questionText);
   const unknownAuthor = lang === "ru" ? "неизвестный автор" : "unknown author";
 
-  return candidates.map((candidate, i) => {
-    const message = byId.get(Number(targetMessageIds[i]));
+  return candidates.map((candidate) => {
+    const targetId = candidate.citedMessageId ?? pickCitedMessageId(candidate.sourceMessageIds, byId, questionWords);
+    const message = byId.get(Number(targetId));
     return {
       authorDisplayName: message?.author_display_name ?? unknownAuthor,
       messageDate: message?.sent_at ?? candidate.firstMessageAt,

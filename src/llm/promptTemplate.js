@@ -3,19 +3,26 @@
 
 // Two distinct "can't answer" sentinels, not one — the difference matters
 // for what we show the user afterward (see answerQuestion.js):
-// - NO_ANSWER_MARKER: the question fits this chat's subject matter, but the
-//   specific answer isn't in the provided fragments. Worth still offering
-//   loosely-related messages — the topic is right, just not this exact fact.
+// - NO_ANSWER_MARKER: now a true last resort — the fragments contain
+//   nothing even loosely related to the question, not enough to hedge a
+//   guess from. Once retrieval clears CONFIDENCE_THRESHOLD, the LLM only
+//   ever sees fragments with *some* topical overlap, so a bare refusal
+//   should be rare; the model is instructed below to give an explicitly
+//   hedged best-effort answer instead whenever related-but-not-exact
+//   content exists (per user feedback: a flat "couldn't find it" was
+//   discarding usable circumstantial info the chat actually had).
 // - NOT_RELATED_MARKER: the question has nothing to do with what this chat
 //   discusses at all (e.g. asking a car-club chat about the weather).
-//   Offering "related" content here would just be noise — whatever scored
-//   highest by embedding similarity is still unrelated to the question.
+//   Never hedge here — offering a "guess" built from unrelated content
+//   would just be noise, worse than a plain refusal.
 // Without this split we can only infer relatedness indirectly (did the
 // question clear CONFIDENCE_THRESHOLD before reaching the LLM?), which is a
 // poor proxy — a genuinely on-topic question can clear that gate and still
 // get correctly refused by the LLM, and conflating that with "off-topic"
 // wrongly hides content the user could actually use. See API_CONTRACTS.md
-// §3 ("never fabricate ... say 'I don't know'").
+// §3 ("never fabricate ... say 'I don't know'") — the hedge-and-label
+// approach below stays inside that rule: it never invents facts, it just
+// makes an inference from real fragments and says out loud that it's one.
 export const NO_ANSWER_MARKER = "NO_ANSWER_FOUND";
 export const NOT_RELATED_MARKER = "NOT_RELATED_TO_CHAT";
 
@@ -52,8 +59,8 @@ Rules:
 - Answer ONLY based on the provided chat history fragments below. Never invent facts that aren't in these fragments.
 - Respond in the SAME LANGUAGE the question was asked in, regardless of what language the chat history itself is in.
 - Each fragment is dated, and you're told today's actual date. Use both to resolve relative time references ("today", "tomorrow", "this week", "next Monday") in either the question or the chat history — don't guess, and don't treat a question just because it uses a relative time word as automatically unanswerable. A dated fragment that clearly settles a relative-time question (e.g. a fragment from today's date saying a decision was made) is a real answer, not a live-data request.
-- If the question is something this chat's participants could plausibly discuss, but the specific answer isn't in the provided fragments, respond with exactly "${NO_ANSWER_MARKER}" and nothing else.
-- If the question is the kind of thing this chat's history could never answer NO MATTER WHAT it contains or when it's asked (e.g. the current weather right now, today's exchange rate, the current time) — as opposed to a question about a decision/event/plan that this chat's history could plausibly have recorded — respond with exactly "${NOT_RELATED_MARKER}" and nothing else. Also use this for general knowledge unrelated to what this chat discusses, or a misdirected question. Apply this even if the chat happens to share some vocabulary with the question (e.g. a place name) — judge the substance of the question, not incidental word overlap.
+- If the question is something this chat's participants could plausibly discuss, and the fragments contain related content that doesn't directly and explicitly state the answer, don't refuse — give your best-effort answer inferred from that related content instead, but make the guess unmistakable: start the answer with a short hedge in the question's own language (e.g. Russian "Точно не уверен, но, судя по переписке, ..." / English "I'm not certain, but based on the chat it looks like ...") before the inferred answer. This still counts as a substantive answer: keep it concise and add the "${SOURCE_MARKER_PREFIX}" line as usual, citing the specific message the inference is drawn from. Only respond with exactly "${NO_ANSWER_MARKER}" and nothing else when the fragments contain nothing even loosely related to the question — not enough to make any reasonable guess from.
+- If the question is the kind of thing this chat's history could never answer NO MATTER WHAT it contains or when it's asked (e.g. the current weather right now, today's exchange rate, the current time) — as opposed to a question about a decision/event/plan that this chat's history could plausibly have recorded — respond with exactly "${NOT_RELATED_MARKER}" and nothing else, even if the fragments contain related-looking content. Also use this for general knowledge unrelated to what this chat discusses, or a misdirected question. Apply this even if the chat happens to share some vocabulary with the question (e.g. a place name) — judge the substance of the question, not incidental word overlap. Never hedge a guess for this case — an off-topic question stays refused outright.
 - Keep answers concise and to the point.
 - Plain text only — no Markdown (no **bold**, *italics*, backticks, or bullet/numbered lists). The reply is sent as-is, so any markup would show up as literal asterisks/symbols instead of formatting.
 - Don't refer to "fragments" or "context" — answer as though you simply know the chat's history.

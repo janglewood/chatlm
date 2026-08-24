@@ -65,6 +65,17 @@ const schema = z
     // that's actually validated by data for this failure mode.
     CHUNK_MAX_TOKENS: intFromString.default(200),
     CHUNK_MAX_GAP_MINUTES: intFromString.default(20),
+    // pgvector's HNSW index (idx_embeddings_vector_cosine) is approximate —
+    // recall trades off against ef_search, and pgvector's own default (40)
+    // is tuned for generic workloads, not calibrated against this corpus.
+    // Verified live: the single best-matching chunk for a real question
+    // (cosine score 0.55, well clear of every other candidate) was silently
+    // missing from the ANN top-8 at ef_search=40, even though nothing else
+    // scored close to it — raising this to 100 reliably surfaced it at rank
+    // #1. Higher ef_search costs more per query (wider graph search); 100
+    // is a conservative first bump validated against one failure case, not
+    // an exhaustive sweep — revisit if latency becomes an issue at scale.
+    HNSW_EF_SEARCH: intFromString.default(100),
     FREE_TIER_DAILY_QUESTION_LIMIT: intFromString.default(20),
     // "Also found" / "possibly related" section — shown alongside a normal
     // answer, and in place of a bare refusal when there's at least
