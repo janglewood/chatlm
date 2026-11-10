@@ -4,3 +4,10 @@ node_modules/
 mtproto.session
 npm-debug.log*
 .DS_Store
+
+# web/ (Next.js landing pages) — bot deploy/test isolation per specs/GTM_LANDINGS.md §A.1
+web/node_modules/
+web/.next/
+web/.env.local
+web/.hallmark/
+*.tsbuildinfo
