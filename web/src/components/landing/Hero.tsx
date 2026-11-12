@@ -20,7 +20,8 @@ export function Hero({
   secondaryCta: Cta;
   fieldExamples?: QAExample[];
 }) {
-  const minHeight = posture === "stage" ? "min-h-[calc(100dvh-180px)]" : "min-h-[64dvh]";
+  const minHeight =
+    posture === "stage" ? "min-h-[calc(100dvh-180px)]" : "min-h-[64dvh]";
 
   return (
     <section className="overflow-hidden pt-lg">
@@ -32,7 +33,10 @@ export function Hero({
           trick. */}
       <div className={`relative flex items-center ${minHeight}`}>
         {fieldExamples && (
-          <GlyphField examples={fieldExamples} clearTo={posture === "stage" ? 0.42 : 0.66} />
+          <GlyphField
+            examples={fieldExamples}
+            clearTo={posture === "stage" ? 0.42 : 0.66}
+          />
         )}
         {/* pointer-events-none here: this wrapper is sized by .container
             (full hero width via max-width/gutter) even though the visible
@@ -40,14 +44,24 @@ export function Hero({
             swallow hover/click before it ever reaches the field underneath.
             The two real controls opt back in explicitly. */}
         <div className="container relative pointer-events-none">
-          <div className={posture === "stage" ? "w-full lg:w-[46%]" : "w-full lg:w-[64%]"}>
+          <div
+            className={
+              posture === "stage" ? "w-full lg:w-[46%]" : "w-full lg:w-[64%]"
+            }
+          >
             <h1 className="text-display text-ink">{headline}</h1>
             <p className="lead mt-md text-ink-2">{lead}</p>
             <div className="mt-xl flex flex-wrap gap-sm">
-              <a href={primaryCta.href} className="key key--primary pointer-events-auto">
+              <a
+                href={primaryCta.href}
+                className="key key--primary pointer-events-auto"
+              >
                 {primaryCta.label}
               </a>
-              <a href={secondaryCta.href} className="key key--quiet pointer-events-auto">
+              <a
+                href={secondaryCta.href}
+                className="key key--quiet pointer-events-auto bg-paper z-10"
+              >
                 {secondaryCta.label}
               </a>
             </div>

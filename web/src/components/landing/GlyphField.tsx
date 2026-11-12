@@ -261,13 +261,22 @@ export function GlyphField({
     );
     io.observe(container);
 
+    // `pointer` keeps the last known position even after the real pointer
+    // leaves — `pointerActive` is what actually toggles. The CTA links over
+    // the hero sit on top of this field with pointer-events re-enabled, so
+    // moving onto them fires pointerleave here even though the cursor never
+    // left the field visually; without decoupling position from activity,
+    // that reads as the lens hard-cutting instead of fading out.
     let pointer: { x: number; y: number } | null = null;
+    let pointerActive = false;
+    let pointerStrength = 0;
     const onMove = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
       pointer = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      pointerActive = true;
     };
     const onLeave = () => {
-      pointer = null;
+      pointerActive = false;
     };
     container.addEventListener("pointermove", onMove);
     container.addEventListener("pointerleave", onLeave);
@@ -334,12 +343,12 @@ export function GlyphField({
           let color = toneColors[cellTone[y][x]];
           let lensAlpha = 0;
 
-          if (pointer) {
+          if (pointer && pointerStrength > 0.01) {
             const cx = x * CELL_W + CELL_W / 2;
             const cy = y * CELL_H + CELL_H / 2;
             const d = Math.hypot(cx - pointer.x, cy - pointer.y);
             if (d < LENS_RADIUS) {
-              const boost = 1 - d / LENS_RADIUS;
+              const boost = (1 - d / LENS_RADIUS) * pointerStrength;
               if (boost > 0.1) visible = true; // the lens reveals cells that would otherwise be blank
               lensAlpha = boost;
             }
@@ -435,6 +444,8 @@ export function GlyphField({
           phase = next;
         }
       }
+
+      pointerStrength += ((pointerActive ? 1 : 0) - pointerStrength) * 0.25;
 
       driftField();
       ctx.clearRect(0, 0, w, h);
